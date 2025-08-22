@@ -1,0 +1,53 @@
+name: Run eBPF Trace
+
+on:
+  workflow_dispatch: # Trigger manually from GitHub Actions tab
+
+jobs:
+  ebpf-trace:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (BCC, Python, headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r) python3-bpfcc
+
+      - name: Run eBPF Python script
+        run: |
+          cat > trace_connect.py <<'EOF'
+          from bcc import BPF
+
+          bpf_program = """
+          #include <uapi/linux/ptrace.h>
+          #include <linux/sched.h>
+
+          TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
+              char fname[256];
+              char comm[16];
+              u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+              bpf_get_current_comm(&comm, sizeof(comm));
+              bpf_probe_read_user_str(&fname, sizeof(fname), (void *)args->filename);
+
+              bpf_trace_printk("[ALERT] Exec: %s (PID %d)\\n", fname, pid);
+
+              return 0;
+          }
+          """
+
+          b = BPF(text=bpf_program)
+          print("🚀 Tracing execve (process executions from /tmp)... (Ctrl+C to stop)")
+
+          try:
+              b.trace_print()
+          except KeyboardInterrupt:
+              print("\n🛑 Stopped tracing.")
+          EOF
+
+          sudo python3 trace_connect.py
