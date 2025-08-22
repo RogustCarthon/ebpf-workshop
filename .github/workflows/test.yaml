@@ -23,35 +23,40 @@ jobs:
           cat > trace_connect.py <<'EOF'
           from bcc import BPF
 
-          bpf_program = """
+          bpf_code = """
           #include <uapi/linux/ptrace.h>
           #include <linux/sched.h>
 
-          TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
-              char fname[256];
-              char comm[16];
-              u32 pid = bpf_get_current_pid_tgid() >> 32;
+          TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
+              char comm[16] = {};
+              char fname[256] = {};
 
               bpf_get_current_comm(&comm, sizeof(comm));
-              bpf_probe_read_user_str(&fname, sizeof(fname), (void *)args->filename);
+              int ret = bpf_probe_read_user_str(&fname, sizeof(fname), args->filename);
 
-              // Only trace /bin/ls executions
-              if (fname[0] == '/' && fname[1] == 'b' && fname[2] == 'i' && fname[3] == 'n' &&
-                  fname[4] == '/' && fname[5] == 'l' && fname[6] == 's' && fname[7] == '\0') {
-                  bpf_trace_printk("[ALERT] Exec: %s (PID %d)\\n", fname, pid);
-              }
+              bpf_trace_printk("[EAD] Process: %s\\n", comm);
+              bpf_trace_printk("             File: %s\\n", fname);
+
+              return 0;
+          }
+
+          TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
+              char comm[16] = {};
+              char fname[256] = {};
+
+              bpf_get_current_comm(&comm, sizeof(comm));
+              int ret = bpf_probe_read_user_str(&fname, sizeof(fname), args->filename);
+
+              bpf_trace_printk("[READ] Process: %s\\n", comm);
+              bpf_trace_printk("             File: %s\\n", fname);
 
               return 0;
           }
           """
 
-          b = BPF(text=bpf_program)
-          print("🚀 Tracing execve for /bin/ls only... (Ctrl+C to stop)")
-
-          try:
-              b.trace_print()
-          except KeyboardInterrupt:
-              print("\n🛑 Stopped tracing.")
+          b = BPF(text=bpf_code)
+          print("Tracing ONLY file opens (openat & openat2 tracepoints)... Ctrl+C to stop.")
+          b.trace_print()
           EOF
 
           sudo python3 trace_connect.py
