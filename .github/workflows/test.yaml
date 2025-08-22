@@ -18,7 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r) python3-bpfcc
 
-      - name: Run eBPF Python script
+      - name: Run eBPF Python script in background
         run: |
           cat > trace_connect.py <<'EOF'
           from bcc import BPF
@@ -27,6 +27,23 @@ jobs:
           #include <uapi/linux/ptrace.h>
           #include <linux/sched.h>
 
+          static __inline int endswith_env(const char *fname) {
+              #pragma unroll
+              for (int i = 4; i < 256; i++) {
+                  if (fname[i] == '\\0') {
+                      if (fname[i-1] == 'v' &&
+                          fname[i-2] == 'n' &&
+                          fname[i-3] == 'e' &&
+                          fname[i-4] == '.') {
+                          return 1;
+                      } else {
+                          return 0;
+                      }
+                  }
+              }
+              return 0;
+          }
+
           TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
               char comm[16] = {};
               char fname[256] = {};
@@ -34,8 +51,10 @@ jobs:
               bpf_get_current_comm(&comm, sizeof(comm));
               int ret = bpf_probe_read_user_str(&fname, sizeof(fname), args->filename);
 
-              bpf_trace_printk("[EAD] Process: %s\\n", comm);
-              bpf_trace_printk("             File: %s\\n", fname);
+              if (ret > 0 && endswith_env(fname)) {
+                  bpf_trace_printk("[.env READ] Process: %s\\n", comm);
+                  bpf_trace_printk("             File: %s\\n", fname);
+              }
 
               return 0;
           }
@@ -47,16 +66,36 @@ jobs:
               bpf_get_current_comm(&comm, sizeof(comm));
               int ret = bpf_probe_read_user_str(&fname, sizeof(fname), args->filename);
 
-              bpf_trace_printk("[READ] Process: %s\\n", comm);
-              bpf_trace_printk("             File: %s\\n", fname);
+              if (ret > 0 && endswith_env(fname)) {
+                  bpf_trace_printk("[.env READ] Process: %s\\n", comm);
+                  bpf_trace_printk("             File: %s\\n", fname);
+              }
 
               return 0;
           }
           """
 
           b = BPF(text=bpf_code)
-          print("Tracing ONLY file opens (openat & openat2 tracepoints)... Ctrl+C to stop.")
+          print("Tracing ONLY .env file opens (openat & openat2 tracepoints)...")
           b.trace_print()
           EOF
 
-          sudo python3 trace_connect.py
+          # Start tracer in background and redirect output
+          sudo python3 trace_connect.py > trace_output.log 2>&1 &
+
+          # Save background PID
+          echo $! > tracer_pid.txt
+
+      - name: Trigger .env file read
+        run: |
+          echo "SECRET=12345" > .env
+          cat .env
+
+          # Give the tracer a moment to capture
+          sleep 3
+
+      - name: Stop tracer and show results
+        run: |
+          sudo kill $(cat tracer_pid.txt)
+          echo "==== eBPF Trace Output ===="
+          cat trace_output.log
