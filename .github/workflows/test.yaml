@@ -35,14 +35,18 @@ jobs:
               bpf_get_current_comm(&comm, sizeof(comm));
               bpf_probe_read_user_str(&fname, sizeof(fname), (void *)args->filename);
 
-              bpf_trace_printk("[ALERT] Exec: %s (PID %d)\\n", fname, pid);
+              // Only trace /bin/ls executions
+              if (fname[0] == '/' && fname[1] == 'b' && fname[2] == 'i' && fname[3] == 'n' &&
+                  fname[4] == '/' && fname[5] == 'l' && fname[6] == 's' && fname[7] == '\0') {
+                  bpf_trace_printk("[ALERT] Exec: %s (PID %d)\\n", fname, pid);
+              }
 
               return 0;
           }
           """
 
           b = BPF(text=bpf_program)
-          print("🚀 Tracing execve (process executions from /tmp)... (Ctrl+C to stop)")
+          print("🚀 Tracing execve for /bin/ls only... (Ctrl+C to stop)")
 
           try:
               b.trace_print()
